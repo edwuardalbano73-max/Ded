@@ -1,12 +1,12 @@
 const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  EmbedBuilder,
-  ActionRowBuilder,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
-  PermissionsBitField
+    Client,
+    GatewayIntentBits,
+    Partials,
+    EmbedBuilder,
+    ActionRowBuilder,
+    StringSelectMenuBuilder,
+    StringSelectMenuOptionBuilder,
+    PermissionsBitField
 } = require("discord.js");
 
 const fs = require("fs");
@@ -14,2436 +14,1710 @@ const path = require("path");
 const http = require("http");
 
 // ============================================================
-// 🤖 DED-BOT
+// 🌌 DED-BOT
 // ============================================================
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const PORT = process.env.PORT || 3000;
-
-const DATA_FILE = path.join(__dirname, "ded-data.json");
 const DEFAULT_PREFIX = "D.";
 
+const DATA_FILE = path.join(__dirname, "ded-data.json");
+
 // ============================================================
-// CLIENT
+// 🤖 CLIENT
 // ============================================================
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildModeration
-  ],
-  partials: [
-    Partials.Channel,
-    Partials.Message
-  ]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildModeration
+    ],
+    partials: [
+        Partials.Message,
+        Partials.Channel,
+        Partials.GuildMember
+    ]
 });
 
 // ============================================================
-// DATA
+// 💾 DATOS
 // ============================================================
 
 let data = {
-  guilds: {}
+    guilds: {}
 };
 
 if (fs.existsSync(DATA_FILE)) {
-  try {
-    data = JSON.parse(
-      fs.readFileSync(DATA_FILE, "utf8")
-    );
-  } catch {
-    data = {
-      guilds: {}
-    };
-  }
+    try {
+        data = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    } catch (error) {
+        console.log("⚠️ No se pudo leer ded-data.json. Se creará uno nuevo.");
+        data = {
+            guilds: {}
+        };
+    }
 }
 
 function saveData() {
-  fs.writeFileSync(
-    DATA_FILE,
-    JSON.stringify(data, null, 2)
-  );
+    try {
+        fs.writeFileSync(
+            DATA_FILE,
+            JSON.stringify(data, null, 2)
+        );
+    } catch (error) {
+        console.error("❌ Error guardando datos:", error);
+    }
 }
 
 function getGuild(guildId) {
-  if (!data.guilds[guildId]) {
-    data.guilds[guildId] = {
-      prefix: DEFAULT_PREFIX,
-      logs: null,
-      users: {}
-    };
+    if (!data.guilds[guildId]) {
+        data.guilds[guildId] = {
+            prefix: DEFAULT_PREFIX,
+            logs: null,
+            users: {}
+        };
 
-    saveData();
-  }
+        saveData();
+    }
 
-  return data.guilds[guildId];
+    return data.guilds[guildId];
 }
 
 function getUser(guildId, userId) {
-  const guild = getGuild(guildId);
+    const guild = getGuild(guildId);
 
-  if (!guild.users[userId]) {
-    guild.users[userId] = {
-      balance: 0,
-      cooldowns: {},
-      warnings: []
-    };
+    if (!guild.users[userId]) {
+        guild.users[userId] = {
+            money: 0,
+            warnings: 0,
+            inventory: [],
+            lastDaily: 0,
+            lastWork: 0,
+            lastCrime: 0,
+            lastPlay: 0,
+            lastGift: 0,
+            lastSearch: 0,
+            lastFish: 0
+        };
 
-    saveData();
-  }
+        saveData();
+    }
 
-  return guild.users[userId];
+    return guild.users[userId];
 }
 
 // ============================================================
-// UTILIDADES
+// 🛠️ FUNCIONES
 // ============================================================
+
+const cooldowns = new Map();
 
 function random(min, max) {
-  return Math.floor(
-    Math.random() * (max - min + 1)
-  ) + min;
+    return Math.floor(
+        Math.random() * (max - min + 1)
+    ) + min;
 }
 
-function money(amount) {
-  return `${amount.toLocaleString("es-ES")} 🪙`;
+function formatMoney(amount) {
+    return `${amount.toLocaleString("es-ES")} 💰`;
 }
 
-function cooldown(user, command, time) {
-  const now = Date.now();
-  const last = user.cooldowns[command] || 0;
-
-  const remaining =
-    time - (now - last);
-
-  if (remaining > 0) {
-    return Math.ceil(remaining / 1000);
-  }
-
-  user.cooldowns[command] = now;
-
-  return 0;
+function cooldownKey(userId, command) {
+    return `${userId}:${command}`;
 }
 
-function timeText(seconds) {
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
+function checkCooldown(userId, command, time) {
+    const key = cooldownKey(userId, command);
+    const now = Date.now();
 
-  const minutes =
-    Math.floor(seconds / 60);
+    if (cooldowns.has(key)) {
+        const expires = cooldowns.get(key);
 
-  const secs =
-    seconds % 60;
+        if (now < expires) {
+            return Math.ceil((expires - now) / 1000);
+        }
+    }
 
-  if (secs === 0) {
-    return `${minutes}m`;
-  }
+    cooldowns.set(key, now + time);
 
-  return `${minutes}m ${secs}s`;
+    return 0;
 }
 
-// ============================================================
-// EMBEDS
-// ============================================================
+function timeLeft(seconds) {
+    if (seconds < 60) {
+        return `${seconds}s`;
+    }
 
-function embed(title, description) {
-  return new EmbedBuilder()
-    .setColor(0x8b5cf6)
-    .setTitle(`╭━━━〔 ${title} 〕━━━╮`)
-    .setDescription(description)
-    .setFooter({
-      text: "🤖 Ded-bot • D.help"
-    })
-    .setTimestamp();
+    const minutes = Math.floor(seconds / 60);
+    const remaining = seconds % 60;
+
+    if (remaining === 0) {
+        return `${minutes}m`;
+    }
+
+    return `${minutes}m ${remaining}s`;
 }
 
-function success(title, description) {
-  return new EmbedBuilder()
-    .setColor(0x22c55e)
-    .setTitle(`╭━━━〔 ✅ ${title} 〕━━━╮`)
-    .setDescription(description)
-    .setFooter({
-      text: "🤖 Ded-bot"
-    })
-    .setTimestamp();
+function createEmbed(title, description) {
+    return new EmbedBuilder()
+        .setColor(0x9b59b6)
+        .setTitle(title)
+        .setDescription(description)
+        .setTimestamp();
 }
 
-function error(title, description) {
-  return new EmbedBuilder()
-    .setColor(0xef4444)
-    .setTitle(`╭━━━〔 ❌ ${title} 〕━━━╮`)
-    .setDescription(description)
-    .setFooter({
-      text: "🤖 Ded-bot"
-    })
-    .setTimestamp();
+function isAdmin(member) {
+    return member.permissions.has(
+        PermissionsBitField.Flags.Administrator
+    );
 }
 
-function adminEmbed(title, description) {
-  return new EmbedBuilder()
-    .setColor(0xf59e0b)
-    .setTitle(`╭━━━〔 👑 ${title} 〕━━━╮`)
-    .setDescription(description)
-    .setFooter({
-      text: "👑 Ded-bot • Administración"
-    })
-    .setTimestamp();
+async function sendLog(guild, message) {
+    const guildData = getGuild(guild.id);
+
+    if (!guildData.logs) {
+        return;
+    }
+
+    const channel = guild.channels.cache.get(
+        guildData.logs
+    );
+
+    if (!channel) {
+        return;
+    }
+
+    try {
+        await channel.send({
+            embeds: [
+                createEmbed(
+                    "📋 Registro",
+                    message
+                )
+            ]
+        });
+    } catch (error) {
+        console.log("⚠️ No se pudo enviar el log.");
+    }
 }
 
 // ============================================================
-// LOGS
-// ============================================================
-
-async function sendLog(
-  guild,
-  title,
-  description,
-  color = 0xf59e0b
-) {
-  const config =
-    getGuild(guild.id);
-
-  if (!config.logs) return;
-
-  const channel =
-    guild.channels.cache.get(config.logs);
-
-  if (!channel) return;
-
-  const log = new EmbedBuilder()
-    .setColor(color)
-    .setTitle(`📋 ${title}`)
-    .setDescription(description)
-    .setFooter({
-      text: "Ded-bot • Logs"
-    })
-    .setTimestamp();
-
-  try {
-    await channel.send({
-      embeds: [log]
-    });
-  } catch {}
-}
-
-// ============================================================
-// MENÚ PUBLICO
+// 📋 MENÚ PÚBLICO
 // ============================================================
 
 function publicMenu() {
-  return new ActionRowBuilder()
-    .addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("ded_help")
-        .setPlaceholder(
-          "📂 Selecciona una categoría..."
-        )
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId("ded_public_help")
+        .setPlaceholder("🌌 Selecciona una categoría")
         .addOptions(
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Economía")
+                .setDescription("💰 Comandos de economía")
+                .setValue("economia")
+                .setEmoji("💰"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Economía")
-            .setDescription(
-              "Monedas y recompensas"
-            )
-            .setEmoji("💰")
-            .setValue("economia"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Diversión")
+                .setDescription("🎮 Juegos y entretenimiento")
+                .setValue("diversion")
+                .setEmoji("🎮"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Diversión")
-            .setDescription(
-              "Minijuegos"
-            )
-            .setEmoji("🎮")
-            .setValue("diversion"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Social")
+                .setDescription("👥 Comandos sociales")
+                .setValue("social")
+                .setEmoji("👥"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Social")
-            .setDescription(
-              "Comandos sociales"
-            )
-            .setEmoji("👥")
-            .setValue("social"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Utilidades")
+                .setDescription("🛠️ Herramientas")
+                .setValue("utilidades")
+                .setEmoji("🛠️"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Utilidades")
-            .setDescription(
-              "Herramientas"
-            )
-            .setEmoji("🛠️")
-            .setValue("utilidades"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Información")
+                .setDescription("📚 Información del servidor")
+                .setValue("informacion")
+                .setEmoji("📚")
+        );
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Información")
-            .setDescription(
-              "Información del bot"
-            )
-            .setEmoji("ℹ️")
-            .setValue("info")
-        )
-    );
+    return new ActionRowBuilder().addComponents(menu);
 }
 
 // ============================================================
-// MENÚ ADMIN
+// 🔐 MENÚ ADMIN
 // ============================================================
 
 function adminMenu() {
-  return new ActionRowBuilder()
-    .addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId("ded_admin")
-        .setPlaceholder(
-          "👑 Selecciona una categoría..."
-        )
+    const menu = new StringSelectMenuBuilder()
+        .setCustomId("ded_admin_help")
+        .setPlaceholder("🔐 Selecciona una categoría")
         .addOptions(
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Economía")
+                .setDescription("💰 Administración de economía")
+                .setValue("admin_economia")
+                .setEmoji("💰"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Moderación")
-            .setDescription(
-              "Herramientas administrativas"
-            )
-            .setEmoji("🛡️")
-            .setValue("moderacion"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Moderación")
+                .setDescription("🛡️ Herramientas de moderación")
+                .setValue("moderacion")
+                .setEmoji("🛡️"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Economía")
-            .setDescription(
-              "Administrar monedas"
-            )
-            .setEmoji("💰")
-            .setValue("economia"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Configuración")
+                .setDescription("⚙️ Configuración del bot")
+                .setValue("configuracion")
+                .setEmoji("⚙️"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Configuración")
-            .setDescription(
-              "Configurar Ded-bot"
-            )
-            .setEmoji("⚙️")
-            .setValue("config"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Servidor")
+                .setDescription("🏠 Administración del servidor")
+                .setValue("servidor")
+                .setEmoji("🏠"),
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Servidor")
-            .setDescription(
-              "Información del servidor"
-            )
-            .setEmoji("🏠")
-            .setValue("server"),
+            new StringSelectMenuOptionBuilder()
+                .setLabel("Información")
+                .setDescription("📚 Información administrativa")
+                .setValue("admin_informacion")
+                .setEmoji("📚")
+        );
 
-          new StringSelectMenuOptionBuilder()
-            .setLabel("Información")
-            .setDescription(
-              "Información administrativa"
-            )
-            .setEmoji("ℹ️")
-            .setValue("info")
-        )
+    return new ActionRowBuilder().addComponents(menu);
+}
+
+// ============================================================
+// 📜 AYUDA PÚBLICA
+// ============================================================
+
+function publicHelp(category) {
+    const lists = {
+        economia: [
+            "**D.balance** — Ver tu dinero",
+            "**D.work** — Trabajar",
+            "**D.crime** — Intentar conseguir dinero",
+            "**D.play** — Jugar por monedas",
+            "**D.daily** — Recompensa diaria",
+            "**D.gift** — Regalo aleatorio",
+            "**D.search** — Buscar objetos",
+            "**D.fish** — Pescar"
+        ],
+
+        diversion: [
+            "**D.coinflip** — Cara o cruz",
+            "**D.dice** — Lanzar un dado",
+            "**D.rps** — Piedra, papel o tijera",
+            "**D.guess** — Adivina el número",
+            "**D.trivia** — Pregunta aleatoria"
+        ],
+
+        social: [
+            "**D.profile** — Ver perfil",
+            "**D.userinfo** — Información de usuario"
+        ],
+
+        utilidades: [
+            "**D.help** — Mostrar ayuda",
+            "**D.prefix** — Ver el prefijo"
+        ],
+
+        informacion: [
+            "**D.serverinfo** — Información del servidor",
+            "**D.leaderboard** — Ranking de dinero",
+            "**D.profile** — Tu perfil"
+        ]
+    };
+
+    return createEmbed(
+        `🌌 Ded-bot • ${category.toUpperCase()}`,
+        lists[category]
+            ? lists[category].join("\n")
+            : "❌ Categoría no encontrada."
     );
 }
 
 // ============================================================
-// READY
+// 🔐 AYUDA ADMIN
 // ============================================================
 
-client.once("ready", () => {
+function adminHelp(category) {
+    const lists = {
+        admin_economia: [
+            "**D.addmoney @usuario cantidad** — Añadir dinero",
+            "**D.removemoney @usuario cantidad** — Quitar dinero",
+            "**D.setmoney @usuario cantidad** — Establecer dinero",
+            "**D.resetmoney @usuario** — Reiniciar dinero",
+            "**D.leaderboard** — Ver ranking"
+        ],
 
-  console.log(
-    "===================================="
-  );
+        moderacion: [
+            "**D.kick @usuario** — Expulsar usuario",
+            "**D.ban @usuario** — Banear usuario",
+            "**D.timeout @usuario minutos** — Silenciar",
+            "**D.untimeout @usuario** — Quitar silencio",
+            "**D.warn @usuario razón** — Advertencia",
+            "**D.warnings @usuario** — Ver advertencias",
+            "**D.clear cantidad** — Borrar mensajes"
+        ],
 
-  console.log(
-    "🤖 Ded-bot conectado correctamente"
-  );
+        configuracion: [
+            "**D.prefix nuevoPrefijo** — Cambiar prefijo",
+            "**D.logs** — Configurar canal de logs"
+        ],
 
-  console.log(
-    `👤 ${client.user.tag}`
-  );
+        servidor: [
+            "**D.serverinfo** — Información del servidor",
+            "**D.userinfo @usuario** — Información de usuario"
+        ],
 
-  console.log(
-    `🆔 ${client.user.id}`
-  );
+        admin_informacion: [
+            "**D.help** — Ayuda pública",
+            "**D.admin** — Panel administrativo",
+            "**D.leaderboard** — Ranking económico"
+        ]
+    };
 
-  console.log(
-    "===================================="
-  );
+    return createEmbed(
+        `🔐 Ded-bot Admin • ${category}`,
+        lists[category]
+            ? lists[category].join("\n")
+            : "❌ Categoría no encontrada."
+    );
+}
 
-  client.user.setPresence({
-    activities: [
-      {
-        name: "D.help",
-        type: 0
-      }
-    ],
-    status: "online"
-  });
+// ============================================================
+// 🎛️ INTERACCIONES
+// ============================================================
+
+client.on("interactionCreate", async interaction => {
+    if (!interaction.isStringSelectMenu()) {
+        return;
+    }
+
+    if (interaction.customId === "ded_public_help") {
+        const category = interaction.values[0];
+
+        await interaction.update({
+            embeds: [
+                publicHelp(category)
+            ],
+            components: [
+                publicMenu()
+            ]
+        });
+
+        return;
+    }
+
+    if (interaction.customId === "ded_admin_help") {
+        if (!isAdmin(interaction.member)) {
+            await interaction.reply({
+                content: "❌ Necesitas permisos de Administrador.",
+                ephemeral: true
+            });
+
+            return;
+        }
+
+        const category = interaction.values[0];
+
+        await interaction.update({
+            embeds: [
+                adminHelp(category)
+            ],
+            components: [
+                adminMenu()
+            ]
+        });
+    }
 });
 
 // ============================================================
-// INTERACCIONES
+// 👋 MIEMBRO ENTRA
 // ============================================================
 
-client.on(
-  "interactionCreate",
-  async interaction => {
+client.on("guildMemberAdd", async member => {
+    await sendLog(
+        member.guild,
+        `👋 Entró **${member.user.tag}** al servidor.`
+    );
+});
 
-    if (
-      !interaction.isStringSelectMenu()
-    ) return;
+// ============================================================
+// 🚪 MIEMBRO SALE
+// ============================================================
 
-    // ========================================================
-    // HELP PUBLICO
-    // ========================================================
+client.on("guildMemberRemove", async member => {
+    await sendLog(
+        member.guild,
+        `🚪 Salió **${member.user.tag}** del servidor.`
+    );
+});
 
-    if (
-      interaction.customId === "ded_help"
-    ) {
+// ============================================================
+// 🗑️ MENSAJE BORRADO
+// ============================================================
 
-      const value =
-        interaction.values[0];
-
-      const pages = {
-
-        economia: embed(
-          "💰 ECONOMÍA",
-          [
-            "### 💵 RECOMPENSAS",
-            "",
-            "`D.work` → 200–500 🪙",
-            "`D.crime` → 1000–2000 🪙",
-            "`D.play` → hasta 3000 🪙",
-            "`D.daily` → recompensa diaria",
-            "`D.gift` → regalo aleatorio",
-            "`D.search` → buscar monedas",
-            "`D.fish` → pescar",
-            "",
-            "### 🎮 MINIJUEGOS",
-            "",
-            "`D.coinflip`",
-            "`D.dice`",
-            "`D.rps`",
-            "`D.guess`",
-            "`D.trivia`",
-            "`D.balance`",
-            "`D.profile`"
-          ].join("\n")
-        ),
-
-        diversion: embed(
-          "🎮 DIVERSIÓN",
-          [
-            "`D.play 1/2/3`",
-            "`D.coinflip`",
-            "`D.dice`",
-            "`D.rps piedra/papel/tijera`",
-            "`D.guess número`",
-            "`D.trivia`",
-            "`D.fish`"
-          ].join("\n")
-        ),
-
-        social: embed(
-          "👥 SOCIAL",
-          [
-            "`D.profile`",
-            "`D.balance`",
-            "",
-            "👤 Consulta tu información",
-            "💰 Consulta tus monedas"
-          ].join("\n")
-        ),
-
-        utilidades: embed(
-          "🛠️ UTILIDADES",
-          [
-            "`D.help`",
-            "`D.balance`",
-            "`D.profile`",
-            "`D.serverinfo`",
-            "`D.userinfo @usuario`"
-          ].join("\n")
-        ),
-
-        info: embed(
-          "ℹ️ INFORMACIÓN",
-          [
-            "🤖 **Ded-bot**",
-            "",
-            "🔰 Prefix inicial: `D.`",
-            "⚡ Discord.js v14",
-            "💾 Economía persistente",
-            "📋 Sistema de logs",
-            "",
-            "👑 Administradores:",
-            "`D.admin`"
-          ].join("\n")
-        )
-      };
-
-      await interaction.update({
-        embeds: [
-          pages[value]
-        ],
-        components: [
-          publicMenu()
-        ]
-      });
-
-      return;
+client.on("messageDelete", async message => {
+    if (!message.guild) {
+        return;
     }
 
-    // ========================================================
-    // ADMIN
-    // ========================================================
-
-    if (
-      interaction.customId === "ded_admin"
-    ) {
-
-      if (
-        !interaction.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return interaction.reply({
-          ephemeral: true,
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas permisos de Administrador."
-            )
-          ]
-        });
-      }
-
-      const value =
-        interaction.values[0];
-
-      const pages = {
-
-        moderacion: adminEmbed(
-          "🛡️ MODERACIÓN",
-          [
-            "`D.kick @usuario`",
-            "`D.ban @usuario`",
-            "`D.timeout @usuario minutos`",
-            "`D.untimeout @usuario`",
-            "`D.warn @usuario razón`",
-            "`D.warnings @usuario`",
-            "`D.clear cantidad`",
-            "",
-            "⚠️ Cada comando comprueba sus permisos."
-          ].join("\n")
-        ),
-
-        economia: adminEmbed(
-          "💰 ECONOMÍA",
-          [
-            "`D.addmoney @usuario cantidad`",
-            "`D.removemoney @usuario cantidad`",
-            "`D.setmoney @usuario cantidad`",
-            "`D.resetmoney @usuario`",
-            "`D.leaderboard`"
-          ].join("\n")
-        ),
-
-        config: adminEmbed(
-          "⚙️ CONFIGURACIÓN",
-          [
-            "`D.prefix nuevoPrefix`",
-            "`D.logs #canal`",
-            "",
-            "🔰 Cambia el prefix del servidor.",
-            "📋 Configura los logs."
-          ].join("\n")
-        ),
-
-        server: adminEmbed(
-          "🏠 SERVIDOR",
-          [
-            "`D.serverinfo`",
-            "`D.userinfo @usuario`",
-            "",
-            "ℹ️ Información del servidor."
-          ].join("\n")
-        ),
-
-        info: adminEmbed(
-          "ℹ️ ADMINISTRACIÓN",
-          [
-            "👑 Panel administrativo de Ded-bot.",
-            "",
-            "🛡️ Moderación",
-            "💰 Economía",
-            "⚙️ Configuración",
-            "🏠 Servidor"
-          ].join("\n")
-        )
-      };
-
-      await interaction.update({
-        embeds: [
-          pages[value]
-        ],
-        components: [
-          adminMenu()
-        ]
-      });
+    if (message.author?.bot) {
+        return;
     }
-  }
-);
-
-// ============================================================
-// MENSAJES ELIMINADOS
-// ============================================================
-
-client.on(
-  "messageDelete",
-  async message => {
-
-    if (!message.guild) return;
-
-    if (message.author?.bot) return;
 
     await sendLog(
-      message.guild,
-      "🗑️ MENSAJE ELIMINADO",
-      [
-        `👤 Autor: ${message.author || "Desconocido"}`,
-        `📍 Canal: ${message.channel}`,
-        "",
-        "💬 Contenido:",
-        message.content || "*No disponible*"
-      ].join("\n"),
-      0xef4444
+        message.guild,
+        `🗑️ Mensaje eliminado de ${message.channel}.\n` +
+        `👤 Autor: **${message.author?.tag || "Desconocido"}**`
     );
-  }
-);
+});
 
 // ============================================================
-// COMANDOS
+// 💬 MENSAJES / COMANDOS
 // ============================================================
 
-client.on(
-  "messageCreate",
-  async message => {
+client.on("messageCreate", async message => {
+    if (!message.guild) {
+        return;
+    }
 
-    if (!message.guild) return;
-    if (message.author.bot) return;
+    if (message.author.bot) {
+        return;
+    }
 
-    const config =
-      getGuild(message.guild.id);
+    const guildData = getGuild(message.guild.id);
 
-    const prefix =
-      config.prefix || DEFAULT_PREFIX;
+    const prefix = guildData.prefix || DEFAULT_PREFIX;
 
-    if (
-      !message.content.startsWith(prefix)
-    ) return;
+    if (!message.content.startsWith(prefix)) {
+        return;
+    }
 
-    const args =
-      message.content
+    const args = message.content
         .slice(prefix.length)
         .trim()
         .split(/\s+/);
 
-    const command =
-      args.shift()?.toLowerCase();
+    const command = args.shift()?.toLowerCase();
 
-    if (!command) return;
+    if (!command) {
+        return;
+    }
 
-    const user =
-      getUser(
+    const userData = getUser(
         message.guild.id,
         message.author.id
-      );
+    );
 
     // ========================================================
-    // HELP
+    // 📚 HELP
     // ========================================================
 
     if (command === "help") {
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🌌 Ded-bot • Ayuda",
+                    `Usa el menú de abajo para ver los comandos.\n\n` +
+                    `⚡ Prefijo actual: \`${prefix}\``
+                )
+            ],
+            components: [
+                publicMenu()
+            ]
+        });
 
-      return message.channel.send({
-        embeds: [
-          embed(
-            "🤖 DED-BOT",
-            [
-              "```",
-              "╭────────────────────╮",
-              "│      🤖 DED-BOT    │",
-              "│    PANEL DE AYUDA  │",
-              "╰────────────────────╯",
-              "```",
-              "",
-              "✨ Selecciona una categoría.",
-              "",
-              "💰 Economía",
-              "🎮 Diversión",
-              "👥 Social",
-              "🛠️ Utilidades",
-              "ℹ️ Información",
-              "",
-              `🔰 Prefix: \`${prefix}\``
-            ].join("\n")
-          )
-        ],
-        components: [
-          publicMenu()
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // ADMIN
+    // 🔐 ADMIN
     // ========================================================
 
     if (command === "admin") {
+        if (!isAdmin(message.member)) {
+            await message.reply(
+                "❌ Necesitas permisos de Administrador."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Este panel es únicamente para administradores."
-            )
-          ]
+            return;
+        }
+
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🔐 Ded-bot • Panel Administrativo",
+                    "Selecciona una categoría para administrar el bot."
+                )
+            ],
+            components: [
+                adminMenu()
+            ]
         });
-      }
 
-      return message.channel.send({
-        embeds: [
-          adminEmbed(
-            "👑 PANEL ADMIN",
-            [
-              "```",
-              "╭────────────────────╮",
-              "│    👑 DED-BOT      │",
-              "│   ADMIN PANEL      │",
-              "╰────────────────────╯",
-              "```",
-              "",
-              "Selecciona una categoría."
-            ].join("\n")
-          )
-        ],
-        components: [
-          adminMenu()
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // BALANCE
+    // 💰 BALANCE
     // ========================================================
 
-    if (
-      command === "balance" ||
-      command === "bal"
-    ) {
+    if (command === "balance" || command === "bal") {
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "💰 Tu balance",
+                    `Tienes **${formatMoney(userData.money)}**.`
+                )
+            ]
+        });
 
-      return message.channel.send({
-        embeds: [
-          embed(
-            "💰 BALANCE",
-            [
-              `👤 ${message.author}`,
-              "",
-              `💎 Saldo: **${money(user.balance)}**`
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // WORK
+    // 💼 WORK
     // ========================================================
 
     if (command === "work") {
-
-      const remaining =
-        cooldown(
-          user,
-          "work",
-          20_000
+        const remaining = checkCooldown(
+            message.author.id,
+            "work",
+            20 * 1000
         );
 
-      if (remaining) {
-        return message.reply({
-          embeds: [
-            error(
-              "COOLDOWN",
-              `⏳ Espera **${timeText(remaining)}**.`
-            )
-          ]
+        if (remaining) {
+            await message.reply(
+                `⏳ Debes esperar **${timeLeft(remaining)}**.`
+            );
+
+            return;
+        }
+
+        const earned = random(200, 500);
+
+        userData.money += earned;
+        saveData();
+
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "💼 Trabajo completado",
+                    `Trabajaste y ganaste **${formatMoney(earned)}**.\n\n` +
+                    `💰 Balance: **${formatMoney(userData.money)}**`
+                )
+            ]
         });
-      }
 
-      const amount =
-        random(200, 500);
-
-      user.balance += amount;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "💼 WORK",
-            [
-              `👤 ${message.author}`,
-              "",
-              `💵 Ganaste **${money(amount)}**.`,
-              "",
-              `💰 Saldo: **${money(user.balance)}**`
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // CRIME
+    // 🕵️ CRIME
     // ========================================================
 
     if (command === "crime") {
-
-      const remaining =
-        cooldown(
-          user,
-          "crime",
-          90_000
+        const remaining = checkCooldown(
+            message.author.id,
+            "crime",
+            90 * 1000
         );
 
-      if (remaining) {
-        return message.reply({
-          embeds: [
-            error(
-              "COOLDOWN",
-              `⏳ Espera **${timeText(remaining)}**.`
-            )
-          ]
-        });
-      }
+        if (remaining) {
+            await message.reply(
+                `⏳ Debes esperar **${timeLeft(remaining)}**.`
+            );
 
-      if (
-        Math.random() > 0.10
-      ) {
+            return;
+        }
+
+        const success = Math.random() < 0.10;
+
+        if (success) {
+            const earned = random(1000, 2000);
+
+            userData.money += earned;
+
+            await message.reply({
+                embeds: [
+                    createEmbed(
+                        "🕵️ ¡Éxito!",
+                        `Conseguiste **${formatMoney(earned)}**.`
+                    )
+                ]
+            });
+        } else {
+            const lost = Math.min(1000, userData.money);
+
+            userData.money -= lost;
+
+            await message.reply({
+                embeds: [
+                    createEmbed(
+                        "🚨 Fallaste",
+                        `Perdiste **${formatMoney(lost)}**.`
+                    )
+                ]
+            });
+        }
 
         saveData();
 
-        return message.channel.send({
-          embeds: [
-            error(
-              "🚨 CRIME",
-              "❌ El intento falló.\n\nNo obtuviste recompensa."
-            )
-          ]
-        });
-      }
-
-      const amount =
-        random(1000, 2000);
-
-      user.balance += amount;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "🚨 CRIME",
-            `🎉 ¡Éxito!\n\n💰 Ganaste **${money(amount)}**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // PLAY
+    // 🎮 PLAY
     // ========================================================
 
     if (command === "play") {
-
-      if (!args[0]) {
-
-        return message.reply({
-          embeds: [
-            embed(
-              "🚪 PLAY",
-              [
-                "Elige una puerta:",
-                "",
-                "🚪 `1`",
-                "🚪 `2`",
-                "🚪 `3`",
-                "",
-                `Ejemplo: \`${prefix}play 2\``
-              ].join("\n")
-            )
-          ]
-        });
-      }
-
-      const remaining =
-        cooldown(
-          user,
-          "play",
-          120_000
+        const remaining = checkCooldown(
+            message.author.id,
+            "play",
+            2 * 60 * 1000
         );
 
-      if (remaining) {
-        return message.reply({
-          embeds: [
-            error(
-              "COOLDOWN",
-              `⏳ Espera **${timeText(remaining)}**.`
-            )
-          ]
-        });
-      }
+        if (remaining) {
+            await message.reply(
+                `⏳ Debes esperar **${timeLeft(remaining)}**.`
+            );
 
-      const chosen =
-        Number(args[0]);
+            return;
+        }
 
-      if (
-        ![1, 2, 3].includes(chosen)
-      ) {
+        const winningDoor = random(1, 3);
+        const chosenDoor = random(1, 3);
 
-        user.cooldowns.play = 0;
+        if (chosenDoor === winningDoor) {
+            userData.money += 3000;
 
-        return message.reply({
-          embeds: [
-            error(
-              "PUERTA INCORRECTA",
-              "❌ Debes elegir 1, 2 o 3."
-            )
-          ]
-        });
-      }
+            await message.reply({
+                embeds: [
+                    createEmbed(
+                        "🚪 ¡Puerta correcta!",
+                        `Ganaste **3.000 💰**.`
+                    )
+                ]
+            });
+        } else {
+            const lost = Math.min(2000, userData.money);
 
-      const correct =
-        random(1, 3);
+            userData.money -= lost;
 
-      if (chosen === correct) {
-
-        user.balance += 3000;
+            await message.reply({
+                embeds: [
+                    createEmbed(
+                        "🚪 Puerta equivocada",
+                        `Perdiste **${formatMoney(lost)}**.`
+                    )
+                ]
+            });
+        }
 
         saveData();
 
-        return message.channel.send({
-          embeds: [
-            success(
-              "🚪 PLAY",
-              [
-                "🎉 ¡Elegiste correctamente!",
-                "",
-                `🚪 Puerta: **${correct}**`,
-                `💰 Premio: **${money(3000)}**`
-              ].join("\n")
-            )
-          ]
-        });
-      }
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          error(
-            "🚪 PLAY",
-            [
-              "❌ No era esa puerta.",
-              "",
-              `🔐 La correcta era: **${correct}**`
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // DAILY
+    // 🎁 DAILY
     // ========================================================
 
     if (command === "daily") {
+        const now = Date.now();
+        const cooldown = 24 * 60 * 60 * 1000;
 
-      const remaining =
-        cooldown(
-          user,
-          "daily",
-          86_400_000
-        );
+        if (now - userData.lastDaily < cooldown) {
+            const remaining = Math.ceil(
+                (cooldown - (now - userData.lastDaily)) / 1000
+            );
 
-      if (remaining) {
-        return message.reply({
-          embeds: [
-            error(
-              "DAILY",
-              `⏳ Vuelve en **${timeText(remaining)}**.`
-            )
-          ]
+            await message.reply(
+                `⏳ Ya reclamaste tu recompensa. Vuelve en **${timeLeft(remaining)}**.`
+            );
+
+            return;
+        }
+
+        const reward = random(1000, 2500);
+
+        userData.money += reward;
+        userData.lastDaily = now;
+
+        saveData();
+
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🎁 Recompensa diaria",
+                    `Recibiste **${formatMoney(reward)}**.`
+                )
+            ]
         });
-      }
 
-      const amount =
-        random(1000, 2500);
-
-      user.balance += amount;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "🎁 DAILY",
-            `💰 Recompensa: **${money(amount)}**`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // GIFT
+    // 🎁 GIFT
     // ========================================================
 
     if (command === "gift") {
-
-      const remaining =
-        cooldown(
-          user,
-          "gift",
-          120_000
+        const remaining = checkCooldown(
+            message.author.id,
+            "gift",
+            2 * 60 * 1000
         );
 
-      if (remaining) {
-        return message.reply({
-          embeds: [
-            error(
-              "GIFT",
-              `⏳ Espera **${timeText(remaining)}**.`
-            )
-          ]
+        if (remaining) {
+            await message.reply(
+                `⏳ Debes esperar **${timeLeft(remaining)}**.`
+            );
+
+            return;
+        }
+
+        const reward = random(100, 800);
+
+        userData.money += reward;
+        saveData();
+
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🎁 Regalo",
+                    `Encontraste un regalo con **${formatMoney(reward)}**.`
+                )
+            ]
         });
-      }
 
-      const amount =
-        random(100, 700);
-
-      user.balance += amount;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "🎁 GIFT",
-            `🎁 Encontraste **${money(amount)}**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // SEARCH
+    // 🔎 SEARCH
     // ========================================================
 
     if (command === "search") {
-
-      const remaining =
-        cooldown(
-          user,
-          "search",
-          60_000
+        const remaining = checkCooldown(
+            message.author.id,
+            "search",
+            60 * 1000
         );
 
-      if (remaining) {
-        return message.reply({
-          embeds: [
-            error(
-              "SEARCH",
-              `⏳ Espera **${timeText(remaining)}**.`
-            )
-          ]
+        if (remaining) {
+            await message.reply(
+                `⏳ Debes esperar **${timeLeft(remaining)}**.`
+            );
+
+            return;
+        }
+
+        const reward = random(50, 500);
+
+        userData.money += reward;
+        saveData();
+
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🔎 Búsqueda",
+                    `Encontraste **${formatMoney(reward)}**.`
+                )
+            ]
         });
-      }
 
-      const amount =
-        random(100, 800);
-
-      user.balance += amount;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "🔎 SEARCH",
-            `🔎 Encontraste **${money(amount)}**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // FISH
+    // 🎣 FISH
     // ========================================================
 
     if (command === "fish") {
+        const remaining = checkCooldown(
+            message.author.id,
+            "fish",
+            60 * 1000
+        );
 
-      const catches = [
-        ["🐟 Pez pequeño", 100],
-        ["🐠 Pez tropical", 250],
-        ["🐡 Pez raro", 450],
-        ["🦈 Captura especial", 700]
-      ];
+        if (remaining) {
+            await message.reply(
+                `⏳ Debes esperar **${timeLeft(remaining)}**.`
+            );
 
-      const caught =
-        catches[
-          random(0, catches.length - 1)
-        ];
+            return;
+        }
 
-      user.balance += caught[1];
+        const reward = random(100, 700);
 
-      saveData();
+        userData.money += reward;
+        saveData();
 
-      return message.channel.send({
-        embeds: [
-          success(
-            "🎣 FISH",
-            [
-              `🎣 Capturaste: **${caught[0]}**`,
-              "",
-              `💰 Recompensa: **${money(caught[1])}**`
-            ].join("\n")
-          )
-        ]
-      });
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🎣 Pesca",
+                    `Pescaste algo y recibiste **${formatMoney(reward)}**.`
+                )
+            ]
+        });
+
+        return;
     }
 
     // ========================================================
-    // COINFLIP
+    // 🪙 COINFLIP
     // ========================================================
 
     if (command === "coinflip") {
+        const result = Math.random() < 0.5
+            ? "🪙 Cara"
+            : "🪙 Cruz";
 
-      const result =
-        Math.random() < 0.5
-          ? "🪙 CARA"
-          : "🪙 CRUZ";
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🪙 Coinflip",
+                    `El resultado fue **${result}**.`
+                )
+            ]
+        });
 
-      user.balance += 150;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          embed(
-            "🪙 COINFLIP",
-            [
-              `Resultado: **${result}**`,
-              "",
-              "🎁 Recompensa: **150 🪙**"
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // DICE
+    // 🎲 DICE
     // ========================================================
 
     if (command === "dice") {
+        const result = random(1, 6);
 
-      const result =
-        random(1, 6);
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🎲 Dado",
+                    `Sacaste un **${result}**.`
+                )
+            ]
+        });
 
-      const reward =
-        result * 50;
-
-      user.balance += reward;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "🎲 DICE",
-            [
-              `🎲 Resultado: **${result}**`,
-              "",
-              `💰 Recompensa: **${money(reward)}**`
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // RPS
+    // ✊ RPS
     // ========================================================
 
     if (command === "rps") {
-
-      const choices = [
-        "piedra",
-        "papel",
-        "tijera"
-      ];
-
-      const player =
-        args[0]?.toLowerCase();
-
-      if (
-        !choices.includes(player)
-      ) {
-
-        return message.reply({
-          embeds: [
-            embed(
-              "✊ RPS",
-              [
-                "Usa uno de estos:",
-                "",
-                "`piedra`",
-                "`papel`",
-                "`tijera`"
-              ].join("\n")
-            )
-          ]
-        });
-      }
-
-      const bot =
-        choices[
-          random(0, 2)
+        const options = [
+            "Piedra",
+            "Papel",
+            "Tijera"
         ];
 
-      let reward = 50;
-      let result =
-        "😅 El bot ganó.";
+        const result =
+            options[random(0, options.length - 1)];
 
-      if (player === bot) {
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "✊ Piedra, papel o tijera",
+                    `Ded-bot eligió **${result}**.`
+                )
+            ]
+        });
 
-        reward = 100;
-        result = "🤝 Empate.";
-
-      } else if (
-        (player === "piedra" &&
-          bot === "tijera") ||
-        (player === "papel" &&
-          bot === "piedra") ||
-        (player === "tijera" &&
-          bot === "papel")
-      ) {
-
-        reward = 250;
-        result = "🎉 ¡Ganaste!";
-      }
-
-      user.balance += reward;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          embed(
-            "✊ RPS",
-            [
-              `👤 Tú: **${player}**`,
-              `🤖 Bot: **${bot}**`,
-              "",
-              result,
-              `💰 Premio: **${money(reward)}**`
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // GUESS
+    // 🔢 GUESS
     // ========================================================
 
     if (command === "guess") {
+        const number = random(1, 10);
 
-      const number =
-        Number(args[0]);
-
-      if (
-        !Number.isInteger(number) ||
-        number < 1 ||
-        number > 10
-      ) {
-
-        return message.reply({
-          embeds: [
-            embed(
-              "🔢 GUESS",
-              `Adivina un número del **1 al 10**.\n\nEjemplo: \`${prefix}guess 7\``
-            )
-          ]
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🔢 Adivinanza",
+                    `El número secreto era **${number}**.`
+                )
+            ]
         });
-      }
 
-      const correct =
-        random(1, 10);
-
-      if (number === correct) {
-
-        user.balance += 500;
-
-        saveData();
-
-        return message.channel.send({
-          embeds: [
-            success(
-              "🔢 GUESS",
-              `🎉 ¡Correcto!\n\n💰 Ganaste **${money(500)}**.`
-            )
-          ]
-        });
-      }
-
-      return message.channel.send({
-        embeds: [
-          error(
-            "🔢 GUESS",
-            `❌ Fallaste.\n\nEl número era **${correct}**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // TRIVIA
+    // 🧠 TRIVIA
     // ========================================================
 
     if (command === "trivia") {
-
-      const questions = [
-        {
-          q: "¿Cuál es el planeta más grande?",
-          a: "jupiter"
-        },
-        {
-          q: "¿Cuántos días tiene una semana?",
-          a: "7"
-        },
-        {
-          q: "¿Cuál es la capital de España?",
-          a: "madrid"
-        }
-      ];
-
-      const question =
-        questions[
-          random(0, questions.length - 1)
+        const questions = [
+            {
+                q: "¿Cuál es el planeta más grande del Sistema Solar?",
+                a: "Júpiter"
+            },
+            {
+                q: "¿Cuántos lados tiene un triángulo?",
+                a: "3"
+            },
+            {
+                q: "¿Cuál es la capital de España?",
+                a: "Madrid"
+            }
         ];
 
-      if (!args.length) {
+        const question =
+            questions[random(0, questions.length - 1)];
 
-        return message.channel.send({
-          embeds: [
-            embed(
-              "🧠 TRIVIA",
-              [
-                question.q,
-                "",
-                `Responde: \`${prefix}trivia respuesta\``
-              ].join("\n")
-            )
-          ]
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🧠 Trivia",
+                    `**Pregunta:** ${question.q}\n\n` +
+                    `💡 Respuesta: ||${question.a}||`
+                )
+            ]
         });
-      }
 
-      const answer =
-        args.join(" ").toLowerCase();
-
-      if (
-        answer === question.a
-      ) {
-
-        user.balance += 600;
-
-        saveData();
-
-        return message.channel.send({
-          embeds: [
-            success(
-              "🧠 TRIVIA",
-              "🎉 ¡Respuesta correcta!\n\n💰 Ganaste **600 🪙**."
-            )
-          ]
-        });
-      }
-
-      return message.channel.send({
-        embeds: [
-          error(
-            "🧠 TRIVIA",
-            `❌ Incorrecto.\n\nLa respuesta era **${question.a}**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // PROFILE
+    // 👤 PROFILE
     // ========================================================
 
     if (command === "profile") {
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "👤 Perfil",
+                    `👤 Usuario: ${message.author}\n` +
+                    `💰 Dinero: **${formatMoney(userData.money)}**\n` +
+                    `⚠️ Advertencias: **${userData.warnings}**`
+                )
+            ]
+        });
 
-      return message.channel.send({
-        embeds: [
-          embed(
-            "👤 PERFIL",
-            [
-              `👤 Usuario: ${message.author}`,
-              "",
-              `💰 Monedas: **${money(user.balance)}**`,
-              `⚠️ Warns: **${user.warnings.length}**`
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // SERVERINFO
-    // ========================================================
-
-    if (command === "serverinfo") {
-
-      return message.channel.send({
-        embeds: [
-          embed(
-            "🏠 SERVIDOR",
-            [
-              `🏠 Nombre: **${message.guild.name}**`,
-              `👥 Miembros: **${message.guild.memberCount}**`,
-              `📁 Canales: **${message.guild.channels.cache.size}**`,
-              `🔰 Prefix: \`${prefix}\``
-            ].join("\n")
-          )
-        ]
-      });
-    }
-
-    // ========================================================
-    // USERINFO
+    // 👤 USERINFO
     // ========================================================
 
     if (command === "userinfo") {
+        const member =
+            message.mentions.members.first() ||
+            message.member;
 
-      const target =
-        message.mentions.members.first() ||
-        message.member;
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "👤 Información",
+                    `👤 Usuario: ${member.user.tag}\n` +
+                    `🆔 ID: \`${member.id}\`\n` +
+                    `📅 Entró: <t:${Math.floor(member.joinedTimestamp / 1000)}:R>`
+                )
+            ]
+        });
 
-      const targetData =
-        getUser(
-          message.guild.id,
-          target.id
-        );
-
-      return message.channel.send({
-        embeds: [
-          embed(
-            "👤 USERINFO",
-            [
-              `👤 Usuario: **${target.user.tag}**`,
-              `🆔 ID: \`${target.id}\``,
-              `💰 Monedas: **${money(targetData.balance)}**`,
-              `⚠️ Warns: **${targetData.warnings.length}**`
-            ].join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // PREFIX
+    // 🏠 SERVERINFO
+    // ========================================================
+
+    if (command === "serverinfo") {
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🏠 Información del servidor",
+                    `🏠 Nombre: **${message.guild.name}**\n` +
+                    `👥 Miembros: **${message.guild.memberCount}**\n` +
+                    `🆔 ID: \`${message.guild.id}\``
+                )
+            ]
+        });
+
+        return;
+    }
+
+    // ========================================================
+    // 🏆 LEADERBOARD
+    // ========================================================
+
+    if (command === "leaderboard" || command === "lb") {
+        const users = Object.entries(guildData.users)
+            .sort((a, b) => b[1].money - a[1].money)
+            .slice(0, 10);
+
+        if (users.length === 0) {
+            await message.reply("📭 Todavía no hay datos.");
+
+            return;
+        }
+
+        let text = "";
+
+        for (let i = 0; i < users.length; i++) {
+            const [userId, info] = users[i];
+
+            const member =
+                message.guild.members.cache.get(userId);
+
+            const name =
+                member?.user.username || "Usuario";
+
+            text += `${i + 1}. **${name}** — ${formatMoney(info.money)}\n`;
+        }
+
+        await message.reply({
+            embeds: [
+                createEmbed(
+                    "🏆 Leaderboard",
+                    text
+                )
+            ]
+        });
+
+        return;
+    }
+
+    // ========================================================
+    // ⚙️ PREFIX
     // ========================================================
 
     if (command === "prefix") {
+        if (!isAdmin(message.member)) {
+            await message.reply(
+                "❌ Necesitas permisos de Administrador."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas Administrador."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const newPrefix =
-        args[0];
+        const newPrefix = args[0];
 
-      if (
-        !newPrefix ||
-        newPrefix.length > 5
-      ) {
+        if (!newPrefix) {
+            await message.reply(
+                `⚡ Prefijo actual: \`${prefix}\``
+            );
 
-        return message.reply({
-          embeds: [
-            embed(
-              "⚙️ PREFIX",
-              `Uso: \`${prefix}prefix !\``
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const oldPrefix =
-        config.prefix;
+        if (newPrefix.length > 5) {
+            await message.reply(
+                "❌ El prefijo no puede tener más de 5 caracteres."
+            );
 
-      config.prefix =
-        newPrefix;
+            return;
+        }
 
-      saveData();
+        guildData.prefix = newPrefix;
+        saveData();
 
-      await sendLog(
-        message.guild,
-        "⚙️ PREFIX CAMBIADO",
-        [
-          `👤 Admin: ${message.author}`,
-          `🔴 Antes: \`${oldPrefix}\``,
-          `🟢 Ahora: \`${newPrefix}\``
-        ].join("\n")
-      );
+        await message.reply(
+            `✅ El nuevo prefijo es \`${newPrefix}\`.`
+        );
 
-      return message.channel.send({
-        embeds: [
-          success(
-            "PREFIX",
-            [
-              `🔴 Anterior: \`${oldPrefix}\``,
-              `🟢 Nuevo: \`${newPrefix}\``
-            ].join("\n")
-          )
-        ]
-      });
+        await sendLog(
+            message.guild,
+            `⚙️ ${message.author.tag} cambió el prefijo a \`${newPrefix}\`.`
+        );
+
+        return;
     }
 
     // ========================================================
-    // LOGS
+    // 📋 LOGS
     // ========================================================
 
     if (command === "logs") {
+        if (!isAdmin(message.member)) {
+            await message.reply(
+                "❌ Necesitas permisos de Administrador."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas Administrador."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const channel =
-        message.mentions.channels.first();
+        const channel =
+            message.mentions.channels.first();
 
-      if (!channel) {
+        if (!channel) {
+            await message.reply(
+                "❌ Menciona el canal donde quieres recibir los logs."
+            );
 
-        return message.reply({
-          embeds: [
-            embed(
-              "📋 LOGS",
-              `Uso: \`${prefix}logs #canal\``
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      config.logs =
-        channel.id;
+        guildData.logs = channel.id;
+        saveData();
 
-      saveData();
+        await message.reply(
+            `✅ Los logs se enviarán en ${channel}.`
+        );
 
-      return message.channel.send({
-        embeds: [
-          success(
-            "📋 LOGS",
-            `Los logs se enviarán en ${channel}.`
-          )
-        ]
-      });
+        await sendLog(
+            message.guild,
+            `📋 Sistema de logs configurado por ${message.author.tag}.`
+        );
+
+        return;
     }
 
     // ========================================================
-    // ADD MONEY
+    // 💰 ADD MONEY
     // ========================================================
 
     if (command === "addmoney") {
+        if (!isAdmin(message.member)) {
+            await message.reply(
+                "❌ Necesitas permisos de Administrador."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas Administrador."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.users.first();
+        const member =
+            message.mentions.members.first();
 
-      const amount =
-        Number(args[1]);
+        const amount =
+            parseInt(args[1]);
 
-      if (
-        !target ||
-        !Number.isInteger(amount) ||
-        amount <= 0
-      ) {
-        return message.reply({
-          embeds: [
-            embed(
-              "💰 ADDMONEY",
-              `Uso: \`${prefix}addmoney @usuario 1000\``
-            )
-          ]
-        });
-      }
+        if (!member || isNaN(amount) || amount <= 0) {
+            await message.reply(
+                "❌ Uso: `D.addmoney @usuario cantidad`"
+            );
 
-      const targetUser =
-        getUser(
-          message.guild.id,
-          target.id
+            return;
+        }
+
+        const target =
+            getUser(message.guild.id, member.id);
+
+        target.money += amount;
+
+        saveData();
+
+        await message.reply(
+            `✅ Se añadieron **${formatMoney(amount)}** a ${member}.`
         );
 
-      targetUser.balance += amount;
-
-      saveData();
-
-      await sendLog(
-        message.guild,
-        "💰 DINERO AÑADIDO",
-        [
-          `👑 Admin: ${message.author}`,
-          `👤 Usuario: ${target}`,
-          `💵 Cantidad: **${money(amount)}**`
-        ].join("\n")
-      );
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "DINERO AÑADIDO",
-            `${target} recibió **${money(amount)}**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // REMOVE MONEY
+    // 💰 REMOVE MONEY
     // ========================================================
 
     if (command === "removemoney") {
+        if (!isAdmin(message.member)) {
+            await message.reply(
+                "❌ Necesitas permisos de Administrador."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas Administrador."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.users.first();
+        const member =
+            message.mentions.members.first();
 
-      const amount =
-        Number(args[1]);
+        const amount =
+            parseInt(args[1]);
 
-      if (
-        !target ||
-        !Number.isInteger(amount) ||
-        amount <= 0
-      ) {
-        return message.reply({
-          embeds: [
-            embed(
-              "💸 REMOVEMONEY",
-              `Uso: \`${prefix}removemoney @usuario 1000\``
-            )
-          ]
-        });
-      }
+        if (!member || isNaN(amount) || amount <= 0) {
+            await message.reply(
+                "❌ Uso: `D.removemoney @usuario cantidad`"
+            );
 
-      const targetUser =
-        getUser(
-          message.guild.id,
-          target.id
+            return;
+        }
+
+        const target =
+            getUser(message.guild.id, member.id);
+
+        target.money = Math.max(
+            0,
+            target.money - amount
         );
 
-      targetUser.balance =
-        Math.max(
-          0,
-          targetUser.balance - amount
+        saveData();
+
+        await message.reply(
+            `✅ Se quitaron **${formatMoney(amount)}** a ${member}.`
         );
 
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "DINERO RETIRADO",
-            `${money(amount)} retiradas de ${target}.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // SET MONEY
+    // 💰 SET MONEY
     // ========================================================
 
     if (command === "setmoney") {
+        if (!isAdmin(message.member)) {
+            await message.reply(
+                "❌ Necesitas permisos de Administrador."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas Administrador."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.users.first();
+        const member =
+            message.mentions.members.first();
 
-      const amount =
-        Number(args[1]);
+        const amount =
+            parseInt(args[1]);
 
-      if (
-        !target ||
-        !Number.isInteger(amount) ||
-        amount < 0
-      ) {
-        return message.reply({
-          embeds: [
-            embed(
-              "💰 SETMONEY",
-              `Uso: \`${prefix}setmoney @usuario 5000\``
-            )
-          ]
-        });
-      }
+        if (!member || isNaN(amount) || amount < 0) {
+            await message.reply(
+                "❌ Uso: `D.setmoney @usuario cantidad`"
+            );
 
-      const targetUser =
-        getUser(
-          message.guild.id,
-          target.id
+            return;
+        }
+
+        const target =
+            getUser(message.guild.id, member.id);
+
+        target.money = amount;
+
+        saveData();
+
+        await message.reply(
+            `✅ El balance de ${member} ahora es **${formatMoney(amount)}**.`
         );
 
-      targetUser.balance =
-        amount;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "SETMONEY",
-            `${target} ahora tiene **${money(amount)}**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // RESET MONEY
+    // 🔄 RESET MONEY
     // ========================================================
 
     if (command === "resetmoney") {
+        if (!isAdmin(message.member)) {
+            await message.reply(
+                "❌ Necesitas permisos de Administrador."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.Administrator
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas Administrador."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.users.first();
+        const member =
+            message.mentions.members.first();
 
-      if (!target) {
-        return message.reply({
-          embeds: [
-            embed(
-              "RESETMONEY",
-              `Uso: \`${prefix}resetmoney @usuario\``
-            )
-          ]
-        });
-      }
+        if (!member) {
+            await message.reply(
+                "❌ Uso: `D.resetmoney @usuario`"
+            );
 
-      const targetUser =
-        getUser(
-          message.guild.id,
-          target.id
+            return;
+        }
+
+        const target =
+            getUser(message.guild.id, member.id);
+
+        target.money = 0;
+
+        saveData();
+
+        await message.reply(
+            `✅ Se reinició el dinero de ${member}.`
         );
 
-      targetUser.balance = 0;
-
-      saveData();
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "RESETMONEY",
-            `💰 El saldo de ${target} fue reiniciado.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // LEADERBOARD
-    // ========================================================
-
-    if (
-      command === "leaderboard" ||
-      command === "lb"
-    ) {
-
-      const users =
-        Object.entries(config.users)
-          .sort(
-            (a, b) =>
-              b[1].balance -
-              a[1].balance
-          )
-          .slice(0, 10);
-
-      if (!users.length) {
-        return message.channel.send({
-          embeds: [
-            embed(
-              "🏆 LEADERBOARD",
-              "Todavía no hay usuarios."
-            )
-          ]
-        });
-      }
-
-      const lines =
-        users.map(
-          ([id, info], index) =>
-            `**${index + 1}.** <@${id}> — ${money(info.balance)}`
-        );
-
-      return message.channel.send({
-        embeds: [
-          adminEmbed(
-            "🏆 LEADERBOARD",
-            lines.join("\n")
-          )
-        ]
-      });
-    }
-
-    // ========================================================
-    // KICK
+    // 👢 KICK
     // ========================================================
 
     if (command === "kick") {
+        if (!message.member.permissions.has(
+            PermissionsBitField.Flags.KickMembers
+        )) {
+            await message.reply(
+                "❌ No tienes permiso para expulsar miembros."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.KickMembers
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas permiso de expulsar miembros."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.members.first();
+        const member =
+            message.mentions.members.first();
 
-      if (!target) {
-        return message.reply({
-          embeds: [
-            embed(
-              "👢 KICK",
-              `Uso: \`${prefix}kick @usuario razón\``
-            )
-          ]
-        });
-      }
+        if (!member) {
+            await message.reply(
+                "❌ Uso: `D.kick @usuario`"
+            );
 
-      if (!target.kickable) {
-        return message.reply({
-          embeds: [
-            error(
-              "KICK",
-              "❌ No puedo expulsar a ese usuario."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const reason =
-        args.slice(1).join(" ") ||
-        "Sin razón";
+        if (!member.kickable) {
+            await message.reply(
+                "❌ No puedo expulsar a ese usuario."
+            );
 
-      await target.kick(reason);
+            return;
+        }
 
-      await sendLog(
-        message.guild,
-        "👢 KICK",
-        [
-          `👑 Moderador: ${message.author}`,
-          `👤 Usuario: ${target.user.tag}`,
-          `📝 Razón: ${reason}`
-        ].join("\n")
-      );
+        await member.kick();
 
-      return message.channel.send({
-        embeds: [
-          success(
-            "👢 KICK",
-            `${target.user.tag} fue expulsado.`
-          )
-        ]
-      });
+        await message.reply(
+            `👢 **${member.user.tag}** fue expulsado.`
+        );
+
+        await sendLog(
+            message.guild,
+            `👢 ${message.author.tag} expulsó a ${member.user.tag}.`
+        );
+
+        return;
     }
 
     // ========================================================
-    // BAN
+    // 🔨 BAN
     // ========================================================
 
     if (command === "ban") {
+        if (!message.member.permissions.has(
+            PermissionsBitField.Flags.BanMembers
+        )) {
+            await message.reply(
+                "❌ No tienes permiso para banear miembros."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.BanMembers
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas permiso de banear miembros."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.members.first();
+        const member =
+            message.mentions.members.first();
 
-      if (!target) {
-        return message.reply({
-          embeds: [
-            embed(
-              "🔨 BAN",
-              `Uso: \`${prefix}ban @usuario razón\``
-            )
-          ]
-        });
-      }
+        if (!member) {
+            await message.reply(
+                "❌ Uso: `D.ban @usuario`"
+            );
 
-      if (!target.bannable) {
-        return message.reply({
-          embeds: [
-            error(
-              "BAN",
-              "❌ No puedo banear a ese usuario."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const reason =
-        args.slice(1).join(" ") ||
-        "Sin razón";
+        if (!member.bannable) {
+            await message.reply(
+                "❌ No puedo banear a ese usuario."
+            );
 
-      await target.ban({
-        reason
-      });
+            return;
+        }
 
-      await sendLog(
-        message.guild,
-        "🔨 BAN",
-        [
-          `👑 Moderador: ${message.author}`,
-          `👤 Usuario: ${target.user.tag}`,
-          `📝 Razón: ${reason}`
-        ].join("\n")
-      );
+        await member.ban();
 
-      return message.channel.send({
-        embeds: [
-          success(
-            "🔨 BAN",
-            `${target.user.tag} fue baneado.`
-          )
-        ]
-      });
+        await message.reply(
+            `🔨 **${member.user.tag}** fue baneado.`
+        );
+
+        await sendLog(
+            message.guild,
+            `🔨 ${message.author.tag} baneó a ${member.user.tag}.`
+        );
+
+        return;
     }
 
     // ========================================================
-    // TIMEOUT
+    // 🔇 TIMEOUT
     // ========================================================
 
     if (command === "timeout") {
+        if (!message.member.permissions.has(
+            PermissionsBitField.Flags.ModerateMembers
+        )) {
+            await message.reply(
+                "❌ No tienes permiso para usar timeout."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.ModerateMembers
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas permiso de moderación."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.members.first();
+        const member =
+            message.mentions.members.first();
 
-      const minutes =
-        Number(args[1]);
+        const minutes =
+            parseInt(args[1]);
 
-      if (
-        !target ||
-        !Number.isInteger(minutes) ||
-        minutes < 1 ||
-        minutes > 40320
-      ) {
-        return message.reply({
-          embeds: [
-            embed(
-              "🔇 TIMEOUT",
-              `Uso: \`${prefix}timeout @usuario minutos\``
-            )
-          ]
-        });
-      }
+        if (!member || isNaN(minutes) || minutes <= 0) {
+            await message.reply(
+                "❌ Uso: `D.timeout @usuario minutos`"
+            );
 
-      if (!target.moderatable) {
-        return message.reply({
-          embeds: [
-            error(
-              "TIMEOUT",
-              "❌ No puedo aplicar timeout a ese usuario."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const reason =
-        args.slice(2).join(" ") ||
-        "Sin razón";
+        await member.timeout(
+            minutes * 60 * 1000
+        );
 
-      await target.timeout(
-        minutes * 60 * 1000,
-        reason
-      );
+        await message.reply(
+            `🔇 ${member} recibió timeout durante **${minutes} minutos**.`
+        );
 
-      await sendLog(
-        message.guild,
-        "🔇 TIMEOUT",
-        [
-          `👑 Moderador: ${message.author}`,
-          `👤 Usuario: ${target.user.tag}`,
-          `⏱️ Duración: ${minutes} minutos`,
-          `📝 Razón: ${reason}`
-        ].join("\n")
-      );
+        await sendLog(
+            message.guild,
+            `🔇 ${message.author.tag} aplicó timeout a ${member.user.tag} durante ${minutes} minutos.`
+        );
 
-      return message.channel.send({
-        embeds: [
-          success(
-            "🔇 TIMEOUT",
-            `${target.user.tag} recibió timeout durante **${minutes} minutos**.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // UNTIMEOUT
+    // 🔊 UNTIMEOUT
     // ========================================================
 
     if (command === "untimeout") {
+        if (!message.member.permissions.has(
+            PermissionsBitField.Flags.ModerateMembers
+        )) {
+            await message.reply(
+                "❌ No tienes permiso para quitar timeouts."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.ModerateMembers
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas permiso de moderación."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.members.first();
+        const member =
+            message.mentions.members.first();
 
-      if (!target) {
-        return message.reply({
-          embeds: [
-            embed(
-              "🔊 UNTIMEOUT",
-              `Uso: \`${prefix}untimeout @usuario\``
-            )
-          ]
-        });
-      }
+        if (!member) {
+            await message.reply(
+                "❌ Uso: `D.untimeout @usuario`"
+            );
 
-      await target.timeout(null);
+            return;
+        }
 
-      return message.channel.send({
-        embeds: [
-          success(
-            "🔊 UNTIMEOUT",
-            `Se quitó el timeout a ${target.user.tag}.`
-          )
-        ]
-      });
+        await member.timeout(null);
+
+        await message.reply(
+            `🔊 Se quitó el timeout de ${member}.`
+        );
+
+        return;
     }
 
     // ========================================================
-    // WARN
+    // ⚠️ WARN
     // ========================================================
 
     if (command === "warn") {
+        if (!message.member.permissions.has(
+            PermissionsBitField.Flags.ModerateMembers
+        )) {
+            await message.reply(
+                "❌ No tienes permiso para advertir usuarios."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.ModerateMembers
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas permisos de moderación."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.users.first();
+        const member =
+            message.mentions.members.first();
 
-      if (!target) {
-        return message.reply({
-          embeds: [
-            embed(
-              "⚠️ WARN",
-              `Uso: \`${prefix}warn @usuario razón\``
-            )
-          ]
-        });
-      }
+        if (!member) {
+            await message.reply(
+                "❌ Uso: `D.warn @usuario razón`"
+            );
 
-      const reason =
-        args.slice(1).join(" ") ||
-        "Sin razón";
+            return;
+        }
 
-      const targetData =
-        getUser(
-          message.guild.id,
-          target.id
+        const reason =
+            args.slice(1).join(" ") ||
+            "Sin razón especificada";
+
+        const target =
+            getUser(message.guild.id, member.id);
+
+        target.warnings++;
+
+        saveData();
+
+        await message.reply(
+            `⚠️ ${member} recibió una advertencia.\n` +
+            `📝 Razón: **${reason}**\n` +
+            `⚠️ Total: **${target.warnings}**`
         );
 
-      targetData.warnings.push({
-        reason,
-        moderator:
-          message.author.id,
-        date:
-          new Date().toISOString()
-      });
+        await sendLog(
+            message.guild,
+            `⚠️ ${message.author.tag} advirtió a ${member.user.tag}.\nRazón: ${reason}`
+        );
 
-      saveData();
-
-      await sendLog(
-        message.guild,
-        "⚠️ WARN",
-        [
-          `👑 Moderador: ${message.author}`,
-          `👤 Usuario: ${target}`,
-          `📝 Razón: ${reason}`
-        ].join("\n")
-      );
-
-      return message.channel.send({
-        embeds: [
-          success(
-            "⚠️ WARN",
-            `${target} recibió una advertencia.`
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // WARNINGS
+    // ⚠️ WARNINGS
     // ========================================================
 
-    if (
-      command === "warnings" ||
-      command === "warns"
-    ) {
+    if (command === "warnings" || command === "warns") {
+        if (!message.member.permissions.has(
+            PermissionsBitField.Flags.ModerateMembers
+        )) {
+            await message.reply(
+                "❌ No tienes permiso para ver advertencias."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.ModerateMembers
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas permisos de moderación."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const target =
-        message.mentions.users.first();
+        const member =
+            message.mentions.members.first();
 
-      if (!target) {
-        return message.reply({
-          embeds: [
-            embed(
-              "⚠️ WARNINGS",
-              `Uso: \`${prefix}warnings @usuario\``
-            )
-          ]
-        });
-      }
+        if (!member) {
+            await message.reply(
+                "❌ Menciona un usuario."
+            );
 
-      const targetData =
-        getUser(
-          message.guild.id,
-          target.id
+            return;
+        }
+
+        const target =
+            getUser(message.guild.id, member.id);
+
+        await message.reply(
+            `⚠️ **${member.user.tag}** tiene **${target.warnings} advertencias**.`
         );
 
-      if (!targetData.warnings.length) {
-        return message.channel.send({
-          embeds: [
-            embed(
-              "⚠️ WARNINGS",
-              `${target} no tiene advertencias.`
-            )
-          ]
-        });
-      }
-
-      const list =
-        targetData.warnings.map(
-          (warn, index) =>
-            `**${index + 1}.** ${warn.reason}`
-        );
-
-      return message.channel.send({
-        embeds: [
-          adminEmbed(
-            "⚠️ WARNINGS",
-            list.join("\n")
-          )
-        ]
-      });
+        return;
     }
 
     // ========================================================
-    // CLEAR
+    // 🧹 CLEAR
     // ========================================================
 
     if (command === "clear") {
+        if (!message.member.permissions.has(
+            PermissionsBitField.Flags.ManageMessages
+        )) {
+            await message.reply(
+                "❌ No tienes permiso para borrar mensajes."
+            );
 
-      if (
-        !message.member.permissions.has(
-          PermissionsBitField.Flags.ManageMessages
-        )
-      ) {
-        return message.reply({
-          embeds: [
-            error(
-              "SIN PERMISOS",
-              "❌ Necesitas Gestionar mensajes."
-            )
-          ]
-        });
-      }
+            return;
+        }
 
-      const amount =
-        Number(args[0]);
+        const amount =
+            parseInt(args[0]);
 
-      if (
-        !Number.isInteger(amount) ||
-        amount < 1 ||
-        amount > 100
-      ) {
-        return message.reply({
-          embeds: [
-            embed(
-              "🧹 CLEAR",
-              `Uso: \`${prefix}clear 10\``
-            )
-          ]
-        });
-      }
+        if (
+            isNaN(amount) ||
+            amount < 1 ||
+            amount > 100
+        ) {
+            await message.reply(
+                "❌ Usa una cantidad entre 1 y 100."
+            );
 
-      const deleted =
+            return;
+        }
+
         await message.channel.bulkDelete(
-          amount,
-          true
+            amount,
+            true
         );
 
-      await sendLog(
-        message.guild,
-        "🧹 CLEAR",
-        [
-          `👑 Moderador: ${message.author}`,
-          `📍 Canal: ${message.channel}`,
-          `🗑️ Mensajes: ${deleted.size}`
-        ].join("\n")
-      );
+        const response =
+            await message.channel.send(
+                `🧹 Se eliminaron **${amount} mensajes**.`
+            );
 
-      const msg =
-        await message.channel.send({
-          embeds: [
-            success(
-              "🧹 CLEAR",
-              `Se eliminaron **${deleted.size} mensajes**.`
-            )
-          ]
-        });
+        setTimeout(() => {
+            response.delete().catch(() => {});
+        }, 3000);
 
-      setTimeout(
-        () => msg.delete().catch(() => {}),
-        5000
-      );
+        await sendLog(
+            message.guild,
+            `🧹 ${message.author.tag} eliminó ${amount} mensajes en ${message.channel}.`
+        );
+
+        return;
     }
-  }
 });
 
 // ============================================================
-// ERRORES
+// 🌐 SERVIDOR HTTP PARA RENDER
 // ============================================================
 
-client.on(
-  "error",
-  error => {
+const server = http.createServer((req, res) => {
+    res.writeHead(200, {
+        "Content-Type": "text/plain"
+    });
+
+    res.end("🌌 Ded-bot está funcionando.");
+});
+
+server.listen(PORT, () => {
+    console.log(`🌐 Servidor HTTP activo en el puerto ${PORT}`);
+});
+
+// ============================================================
+// 🤖 READY
+// ============================================================
+
+client.once("ready", () => {
+    console.log("====================================");
+    console.log(`🌌 ${client.user.tag} está conectado.`);
+    console.log(`⚡ Prefijo: ${DEFAULT_PREFIX}`);
+    console.log("====================================");
+
+    client.user.setPresence({
+        activities: [
+            {
+                name: "D.help 🌌",
+                type: 0
+            }
+        ],
+        status: "online"
+    });
+});
+
+// ============================================================
+// ❌ ERRORES
+// ============================================================
+
+process.on("unhandledRejection", error => {
+    console.error("❌ Unhandled Rejection:", error);
+});
+
+process.on("uncaughtException", error => {
+    console.error("❌ Uncaught Exception:", error);
+});
+
+// ============================================================
+// 🔑 LOGIN
+// ============================================================
+
+if (!TOKEN) {
     console.error(
-      "❌ Discord Error:",
-      error
+        "❌ No se encontró DISCORD_TOKEN en las variables de entorno."
     );
-  }
-);
-
-process.on(
-  "unhandledRejection",
-  error => {
-    console.error(
-      "❌ Unhandled Rejection:",
-      error
-    );
-  }
-);
-
-// ============================================================
-// SERVIDOR PARA RENDER
-// ============================================================
-
-http
-  .createServer(
-    (req, res) => {
-
-      res.writeHead(
-        200,
-        {
-          "Content-Type":
-            "text/plain; charset=utf-8"
-        }
-      );
-
-      res.end(
-        "🤖 Ded-bot está online."
-      );
-    }
-  )
-  .listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-      console.log(
-        `🌐 Puerto ${PORT} activo`
-      );
-    }
-  );
-
-// ============================================================
-// LOGIN
-// ============================================================
+    process.exit(1);
+}
 
 client.login(TOKEN);
